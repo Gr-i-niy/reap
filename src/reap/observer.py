@@ -594,6 +594,14 @@ class DeepSeekMoEObserverHookConfig(MoETransformerObserverConfig):
 
 
 @dataclass
+class DeepSeekV3MoEObserverHookConfig(MoETransformerObserverConfig):
+    module_class_name_to_hook_regex: Optional[str] = "DeepseekV3MoE"
+    num_experts_attr_name: str = "experts_per_rank"  # only for ep=1!
+    top_k_attr_name: str = "num_experts_per_tok"
+    fused_experts: bool = False
+
+
+@dataclass
 class Ernie4_5MoEObserverHookConfig(MoETransformerObserverConfig):
     module_class_name_to_hook_regex: Optional[str] = "Ernie4_5_MoeMLP"
     num_experts_attr_name: str = "num_local_experts"
@@ -620,6 +628,7 @@ OBSERVER_CONFIG_REGISTRY = {
     "Llama4ForCausalLM": Llama4MoEObserverHookConfig,
     "MixtralForCausalLM": MixtralMoEObserverHookConfig,
     "DeepseekV2ForCausalLM": DeepSeekMoEObserverHookConfig,
+    "DeepseekV3ForCausalLM": DeepSeekV3MoEObserverHookConfig,
     "Ernie4_5_MoEForCausalLM": Ernie4_5MoEObserverHookConfig,
     "Ernie4_5_MoeForCausalLM": Ernie4_5MoEObserverHookConfig,
     "Glm4MoeForCausalLM": Glm44MoEObserverHookConfig,

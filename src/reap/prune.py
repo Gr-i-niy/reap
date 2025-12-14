@@ -258,7 +258,7 @@ def main():
         device_map="auto",
         torch_dtype="auto",
         trust_remote_code=True,
-        local_files_only=True,
+        # local_files_only=True,  # Commented out to allow downloading from HF Hub
     )
     # record activations or load previously recorded activations
     logger.info(

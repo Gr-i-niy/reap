@@ -3,7 +3,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 MODEL_ATTRS = {
     "Qwen3MoeForCausalLM": {
         "moe_block": "mlp",
@@ -61,6 +60,17 @@ MODEL_ATTRS = {
         "num_experts_per_tok": "num_experts_per_tok",
     },
     "DeepseekV2ForCausalLM": {
+        "moe_block": "mlp",
+        "gate_proj": "gate_proj",
+        "up_proj": "up_proj",
+        "down_proj": "down_proj",
+        "experts": "experts",
+        "fused": False,
+        "router": "gate",
+        "num_experts": "n_routed_experts",
+        "num_experts_per_tok": "num_experts_per_tok",
+    },
+    "DeepseekV3ForCausalLM": {
         "moe_block": "mlp",
         "gate_proj": "gate_proj",
         "up_proj": "up_proj",
@@ -152,16 +162,16 @@ def assert_merge(model, merged_moe, cluster_label):
             dom_expert = expert_indices[0]
             for expert in expert_indices[1:]:
                 assert (
-                    getattr(merged_moe.experts[dom_expert], up_proj).weight
-                    == getattr(merged_moe.experts[expert], up_proj).weight
+                        getattr(merged_moe.experts[dom_expert], up_proj).weight
+                        == getattr(merged_moe.experts[expert], up_proj).weight
                 ).all(), f"Experts {expert_indices} are not merged correctly."
                 assert (
-                    getattr(merged_moe.experts[dom_expert], down_proj).weight
-                    == getattr(merged_moe.experts[expert], down_proj).weight
+                        getattr(merged_moe.experts[dom_expert], down_proj).weight
+                        == getattr(merged_moe.experts[expert], down_proj).weight
                 ).all(), f"Experts {expert_indices} are not merged correctly."
                 assert (
-                    getattr(merged_moe.experts[dom_expert], gate_proj).weight
-                    == getattr(merged_moe.experts[expert], gate_proj).weight
+                        getattr(merged_moe.experts[dom_expert], gate_proj).weight
+                        == getattr(merged_moe.experts[expert], gate_proj).weight
                 ).all(), f"Experts {expert_indices} are not merged correctly."
 
 
@@ -237,6 +247,7 @@ def assert_tied_weights(model, clusters_labels):
                                     f"Max diff: {torch.abs(lora_weight - dom_lora_weight).max()}"
                                 )
 
+
 def get_super_expert_indices(observer_data, include_last_layers: bool = False):
     logger.info("Identifying super experts to preserve...")
     quantile = 99.5
@@ -261,6 +272,7 @@ def get_super_expert_indices(observer_data, include_last_layers: bool = False):
     super_expert_idx = torch.argwhere(super_experts_mask)
     logger.info(f"Identified {super_experts_mask.sum().item()} super experts with threshold: {final_threshold:.4f}")
     return super_expert_idx
+
 
 def register_llama_with_vllm():
     from vllm.model_executor.models import ModelRegistry
