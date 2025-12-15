@@ -242,7 +242,13 @@ class MoETransformerObserver(BaseTransformerObserver):
 
     def _initialize_state(self, output: torch.Tensor, num_experts: int):
         # get device and shape info
-        output_hidden_states = output[0]
+        # Handle different output formats:
+        # - Some models return tuple (hidden_states, router_logits, ...)
+        # - DeepSeek-V3 returns only hidden_states tensor directly
+        if isinstance(output, tuple):
+            output_hidden_states = output[0]
+        else:
+            output_hidden_states = output
         device = "cpu"
         hidden_dim = output_hidden_states.shape[-1]
         layer_state = {}
@@ -339,11 +345,6 @@ class MoETransformerObserver(BaseTransformerObserver):
 
         @torch.no_grad()
         def _hook_fn(module, args, output):
-            if not len(output) >= 2:
-                raise ValueError(
-                    f"Expected output of module {module.__class__.__name__} at layer "
-                    f"{layer_number} to be a tuple of at least length 2, got {len(output)}."
-                )
             input = args[0]  # (batch_size, seq_len, hidden_dim)
             device = input.device
             if layer_number not in self.state:
@@ -374,9 +375,28 @@ class MoETransformerObserver(BaseTransformerObserver):
                 activations = routed_out.view(num_experts, *flat_input.shape)
 
             else:  # loop based MoE execution
-                # ernie returns combined_output, combine_weights, router_loss, gate_logits
-                *_, router_logits = output  # (total_tokens, num_experts)
-                _, selected_experts = torch.topk(router_logits, top_k, dim=-1)
+                # Handle different output formats:
+                # - Some models return (hidden_states, router_logits, ...)
+                # - DeepSeek-V3 returns only hidden_states (tensor, not tuple)
+                if isinstance(output, tuple) and len(output) >= 2:
+                    # ernie returns combined_output, combine_weights, router_loss, gate_logits
+                    *_, router_logits = output  # (total_tokens, num_experts)
+                    _, selected_experts = torch.topk(router_logits, top_k, dim=-1)
+                else:
+                    # DeepSeek-V3 style: output is just hidden_states, compute router_logits from gate
+                    # gate() returns tuple: (topk_idx, topk_weight, aux_loss) or (topk_idx, topk_weight)
+                    gate_output = module.gate(flat_input)
+                    if isinstance(gate_output, tuple):
+                        # DeepSeek-V3 gate returns (topk_idx, topk_weight, ...) 
+                        # topk_idx is already the selected experts
+                        selected_experts = gate_output[0]  # (total_tokens, top_k)
+                        # Compute router_logits from gate weight matrix for metrics
+                        router_logits = torch.matmul(flat_input, module.gate.weight.T)
+                        if hasattr(module.gate, 'e_score_correction_bias') and module.gate.e_score_correction_bias is not None:
+                            router_logits = router_logits + module.gate.e_score_correction_bias
+                    else:
+                        router_logits = gate_output
+                        _, selected_experts = torch.topk(router_logits, top_k, dim=-1)
                 # selected_experts = selected_experts.to(device)
                 for idx, expert in enumerate(module.experts):
                     activations[idx] = expert(flat_input).to(
@@ -596,8 +616,8 @@ class DeepSeekMoEObserverHookConfig(MoETransformerObserverConfig):
 @dataclass
 class DeepSeekV3MoEObserverHookConfig(MoETransformerObserverConfig):
     module_class_name_to_hook_regex: Optional[str] = "DeepseekV3MoE"
-    num_experts_attr_name: str = "experts_per_rank"  # only for ep=1!
-    top_k_attr_name: str = "num_experts_per_tok"
+    num_experts_attr_name: str = "config.n_routed_experts"  # V3 uses config.n_routed_experts
+    top_k_attr_name: str = "config.num_experts_per_tok"  # V3 uses config.num_experts_per_tok
     fused_experts: bool = False
 
 
