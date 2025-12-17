@@ -79,23 +79,19 @@ def dump_args_to_yaml(
     logger.info(f"All arguments saved to {output_path}")
 
 
-def prune(
+def compute_experts_to_prune_per_layer(
     observer_data,
-    model,
-    tokenizer,
-    reap_args,
     prune_args,
     n_experts_to_prune,
-    pruned_model_dir,
-):
+) -> dict[int, list[int]]:
     """
-    Prune the model based on the observer data and clustering.
+    Compute which experts to prune per layer based on observer data.
+    Returns a dict mapping layer index to list of expert indices to retain.
     """
-    model_attrs = MODEL_ATTRS[model.__class__.__name__]
-
+    retained_experts_per_layer = {}
+    
     for layer in observer_data:
         if "expert_proba" not in observer_data[layer]:
-            # Calculate expert probabilities if not already present
             observer_data[layer]["expert_proba"] = (
                 observer_data[layer]["expert_frequency"]
                 / observer_data[layer]["total_tokens"]
@@ -120,10 +116,10 @@ def prune(
                     if metric in observer_data[layer]:
                         observer_data[layer][metric][super_experts_in_layer] = float("inf")
 
-    for layer in tqdm(observer_data, "Pruning layers..."):
+    for layer in observer_data:
         num_experts = observer_data[layer]["expert_frequency"].shape[0]
         if prune_args.prune_method == "ean_ca":
-            ean = torch.zeros(num_experts, device=model.device, dtype=torch.float32)
+            ean = torch.zeros(num_experts, dtype=torch.float32)
             for i in range(num_experts):
                 ean[i] = torch.linalg.norm(
                     observer_data[layer]["routed_characteristic_activation"][i], dim=-1
@@ -143,9 +139,39 @@ def prune(
                 saliency_data, n_experts_to_prune, largest=False
             )
 
-        retained_expert_indicies = [
+        retained_expert_indices = [
             i for i in range(num_experts) if i not in experts_to_prune
         ]
+        retained_experts_per_layer[layer] = retained_expert_indices
+    
+    return retained_experts_per_layer
+
+
+def prune(
+    observer_data,
+    model,
+    tokenizer,
+    reap_args,
+    prune_args,
+    n_experts_to_prune,
+    pruned_model_dir,
+    retained_experts_per_layer: dict[int, list[int]] | None = None,
+):
+    """
+    Prune the model based on the observer data and clustering.
+    
+    If retained_experts_per_layer is provided, use it directly instead of computing from observer_data.
+    This allows separating the analysis phase (on quantized model) from pruning phase (on bf16 model).
+    """
+    model_attrs = MODEL_ATTRS[model.__class__.__name__]
+
+    # Compute which experts to retain if not provided
+    if retained_experts_per_layer is None:
+        retained_experts_per_layer = compute_experts_to_prune_per_layer(
+            observer_data, prune_args, n_experts_to_prune
+        )
+
+    for layer, retained_expert_indicies in tqdm(retained_experts_per_layer.items(), "Pruning layers..."):
         # prune experts
         moe = get_moe(model, layer)
         if not model_attrs["fused"]:
@@ -332,6 +358,27 @@ def main():
         )
     else:
         logger.info(f"Pruning model to {total_experts - n_experts_to_prune} experts...")
+        
+        # Compute which experts to retain based on observer data (can use quantized model)
+        retained_experts_per_layer = compute_experts_to_prune_per_layer(
+            observer_data, prune_args, n_experts_to_prune
+        )
+        
+        # If model was loaded quantized, reload in bf16 for clean pruning and saving
+        if quantization_config is not None:
+            logger.info("Unloading quantized model and reloading in bf16 for clean pruning...")
+            del model
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                device_map="auto",
+                torch_dtype="auto",
+                trust_remote_code=True,
+            )
+            logger.info("bf16 model loaded for pruning")
+        
         prune(
             observer_data,
             model,
@@ -340,6 +387,7 @@ def main():
             prune_args,
             n_experts_to_prune,
             pruned_model_dir,
+            retained_experts_per_layer=retained_experts_per_layer,
         )
         logger.info("pruning completed.")
 
