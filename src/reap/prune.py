@@ -252,12 +252,32 @@ def main():
     # get local patched model if req'd
     model_name = patched_model_map(model_args.model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    
+    # Setup quantization config if requested
+    quantization_config = None
+    if model_args.load_in_8bit and model_args.load_in_4bit:
+        raise ValueError("Cannot use both load_in_8bit and load_in_4bit. Choose one.")
+    if model_args.load_in_8bit:
+        from transformers import BitsAndBytesConfig
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        logger.info("Loading model in 8-bit quantization")
+    elif model_args.load_in_4bit:
+        from transformers import BitsAndBytesConfig
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        )
+        logger.info("Loading model in 4-bit quantization")
+    
     # load model
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         device_map="auto",
-        torch_dtype="auto",
+        torch_dtype="auto" if quantization_config is None else None,
         trust_remote_code=True,
+        quantization_config=quantization_config,
         # local_files_only=True,  # Commented out to allow downloading from HF Hub
     )
     # record activations or load previously recorded activations

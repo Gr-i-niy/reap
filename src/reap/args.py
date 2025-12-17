@@ -68,6 +68,18 @@ class ModelArgs:
             )
         },
     )
+    load_in_8bit: bool = field(
+        default=False,
+        metadata={
+            "help": "Load model in 8-bit quantization using bitsandbytes. Reduces memory usage."
+        },
+    )
+    load_in_4bit: bool = field(
+        default=False,
+        metadata={
+            "help": "Load model in 4-bit quantization using bitsandbytes. Further reduces memory usage."
+        },
+    )
 
 
 @dataclass
